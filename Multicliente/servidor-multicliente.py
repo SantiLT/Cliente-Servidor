@@ -12,11 +12,12 @@ termina, pero primero les mandamos un mensaje de aviso).
 
 import threading
 import socket
+import os
 
 HOST = "127.0.0.1"  
 PORT = 65432
 
-ADMIN_PASSWORD = "pupina67"
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
 shutdown_event = threading.Event()
 
