@@ -1,8 +1,12 @@
 /*
- * Servidor de sockets TCP multicliente en C, usando pthreads.
- * Atiende múltiples clientes a la vez, un thread por conexión.
- * Equivalente a servidor-multicliente.py
+ * Servidor de sockets TCP multicliente en C, con panel de administración
+ * remota. Equivalente a servidor-multicliente.py (versión con admin).
+ *
+ * Un cliente puede autenticarse como admin mandando "ADMIN:<contraseña>"
+ * como primer mensaje. Una vez autenticado, puede chatear normalmente
+ * o mandar "shutdown" en cualquier momento para apagar el servidor.
  */
+
 
 
 
@@ -12,9 +16,18 @@
  #include <unistd.h>
  #include <arpa/inet.h>
  #include <pthread.h>
+ #include <sys/select.h>
 
  #define PORT 65432
  #define BUFFER_SIZE 1024
+ #define MAX_CLIENTES 100
+
+
+ volatile int shutdown_flag = 0;
+
+ int clientes_fds[MAX_CLIENTES];
+ int num_clientes = 0;
+ pthread_mutex_t clientes_locks = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct
 {

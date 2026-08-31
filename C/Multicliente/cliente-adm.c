@@ -1,8 +1,9 @@
 /*
- * Cliente de sockets TCP con loop de mensajes, en C.
- * Se conecta al servidor y permite mandar varios mensajes seguidos
- * desde la terminal, hasta escribir "salir". Equivalente a cliente-loop.py.
+ * Cliente admin en C: se autentica con contraseña y después puede
+ * chatear normalmente O mandar "shutdown" en cualquier momento para
+ * apagar el servidor remotamente. Equivalente a cliente-admin.py.
  */
+
 
 
 
@@ -22,6 +23,7 @@ int main(){
     struct sockaddr_in serv_addr;
     char buffer[BUFFER_SIZE];
     char mensaje[BUFFER_SIZE];
+    char password[BUFFER_SIZE];
 
     //---creo el socket---
 
@@ -51,7 +53,36 @@ int main(){
         exit(EXIT_FAILURE);
     }
 
-    printf("Conectado al servidor. Escribi mensajes (o salir para cortar).\n");
+    printf("Contraseña de admin: ");
+    if (fgets(password, BUFFER_SIZE, stdin) == NULL)
+    {
+        exit(EXIT_FAILURE);
+    }
+    
+    password[strcspn(password, "\n")] = '\0';
+
+    snprintf(mensaje, BUFFER_SIZE, "ADMIN:%s", password);
+    send(sock_fd,mensaje,strlen(mensaje), 0);
+
+    ssize_t bytes_leidos = read(sock_fd, buffer, BUFFER_SIZE - 1);
+    if (bytes_leidos <= 0)
+        {
+            printf("El servidor cerro la conexion.\n");
+            close(sock_fd);
+            return 1;
+        }
+
+    buffer[bytes_leidos] = '\0';
+    printf("Servidor: %s\n", buffer);
+
+    if (strncmp(buffer,"Contraseña incorrecta", 21) == 0)
+    {
+        close(sock_fd);
+        return 1;
+    }
+    
+
+    printf("Escribi mensajes normales, o 'shutdown' para apagar el servidor.\n");
 
 
     //---Mando mensajes---
@@ -69,8 +100,7 @@ int main(){
         send(sock_fd, mensaje, strlen(mensaje), 0);
 
         memset(buffer, 0, BUFFER_SIZE);
-
-        ssize_t bytes_leidos = read(sock_fd, buffer, BUFFER_SIZE - 1);
+        bytes_leidos = read(sock_fd, buffer,BUFFER_SIZE - 1);
 
         if (bytes_leidos <= 0)
         {
@@ -81,7 +111,10 @@ int main(){
         buffer[bytes_leidos] = '\0';
         printf("Servidor: %s\n", buffer);
 
-        if (strncasecmp(mensaje, "salir", 5) == 0 && strlen(mensaje) == 5)
+        int es_salir = (strncasecmp(mensaje,"salir",5) == 0 && strlen(mensaje) == 5);
+        int es_shutdown = (strncasecmp(mensaje,"shutdown",8) == 0 && strlen(mensaje) == 8);
+
+        if (es_salir || es_shutdown)
         {
             break;
         }
@@ -92,6 +125,7 @@ int main(){
 
 
     close(sock_fd);
+    printf("Conexion cerrada.\n");
 
     return 0;
 }
