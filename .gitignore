@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Ejecutables compilados de C (sin extensión)
+C/**/servidor*
+C/**/cliente*
+!C/**/*.c
