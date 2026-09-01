@@ -29,6 +29,34 @@
  int num_clientes = 0;
  pthread_mutex_t clientes_locks = PTHREAD_MUTEX_INITIALIZER;
 
+
+
+void registrar_cliente(int fd){
+    pthread_mutex_lock(&clientes_locks);
+    if (num_clientes < MAX_CLIENTES)
+    {
+        clientes_fds[num_clientes++] = fd;
+    }
+    pthread_mutex_unlock(&clientes_locks);
+    
+}
+
+void quitar_cliente(int fd){
+    pthread_mutex_lock(&clientes_locks);
+    for (int i = 0; i < num_clientes; i++)
+    {
+        if (clientes_fds[i] == fd)
+        {
+            clientes_fds[i] = clientes_fds[num_clientes - 1];
+            num_clientes--;
+            break;
+        }
+        
+    }
+    pthread_mutex_unlock(&clientes_locks);   
+}
+
+
 typedef struct
 {
     int client_fd;
@@ -40,32 +68,85 @@ typedef struct
 void *atender_cliente(void *arg){
     datos_cliente *datos = (datos_cliente *)arg;
     int client_fd = datos -> client_fd;
+    int es_admin = 0;
 
     char ip_str[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &datos -> address.sin_addr,ip_str, INET_ADDRSTRLEN);
     int port = ntohs(datos -> address.sin_port);
 
     printf("[NUEVA CONEXION] %s:%d conectado.\n", ip_str, port);
+    registrar_cliente(client_fd);
 
     char buffer [BUFFER_SIZE];
+
+    ssize_t bytes_leidos = read(client_fd, buffer, BUFFER_SIZE - 1);
+    if (bytes_leidos <= 0)
+    {
+        printf("[DESCONECTADO] %s:%d cerro la conexion antes de identificarse.\n", ip_str, port);
+        goto limpieza;
+    }
+    buffer[bytes_leidos] = '\0';
+
+    if (strncmp(buffer,"ADMIN:",6) == 0)
+    {
+        const char *password_recibida = buffer + 6;
+
+        const char *password_esperada = getenv("ADMIN_PASSWORD");
+        if (password_esperada == NULL)
+        {
+            password_esperada = "admin123";
+        }
+
+        if (strcmp(password_recibida, password_esperada) == 0)
+        {
+            es_admin = 1;
+            printf("[ADMIN] %s:%d se autentico correctamente.\n", ip_str, port);
+            const char *ok = "Ok, autenticado como admin. podes chatear o mandar 'shutdown'";
+            send(client_fd, ok, strlen(ok), 0);
+        }else{
+            printf("[ADMIN] %s:%d intento autenticarse con contraseña incorrecta.\n",ip_str,port);
+            const char *error = "Contraseña incorrecta.";
+            send(client_fd, error, strlen(error), 0);
+            goto limpieza;
+        } 
+    } else {
+        printf("[%s:%d] dice: %s\n", ip_str, port, buffer);
+        if (strncasecmp(buffer,"salir", 5) == 0 && bytes_leidos == 5)
+        {
+            const char *despedida = "Chau!";
+            send(client_fd, despedida, strlen(despedida), 0);
+            printf("[DESCONECTADO] %s:%d pidio salir.\n", ip_str, port);
+            goto limpieza;
+        }
+
+        char respuesta[BUFFER_SIZE];
+        snprintf(respuesta,BUFFER_SIZE, "Servidor recibio: '%s'", buffer);
+        send(client_fd,respuesta,strlen(respuesta), 0);
+        
+    }
     
     while (1)
     {
         memset(buffer, 0, BUFFER_SIZE);
-        ssize_t bytes_leidos = read(client_fd, buffer, BUFFER_SIZE - 1);
+        bytes_leidos = read(client_fd, buffer, BUFFER_SIZE - 1);
 
-        if(bytes_leidos < 0){
-            printf("Eroor al leer del cliente");
-            break;
-        }
-
-        if (bytes_leidos == 0)
+        if (bytes_leidos <= 0)
         {
             printf("[DESCONECTADO] %s:%d cerro la conexion.\n", ip_str, port);
             break;
         }
 
         buffer[bytes_leidos] = '\0';
+
+        if (es_admin && strncasecmp(buffer, "shutdown", 8) == 0 && bytes_leidos == 8)
+        {
+            printf("[ADMIN] %s:%d pidio apagar el servidor.\n", ip_str, port);
+            const char *ok = "Ok, apagando servidor...";
+            send(client_fd, ok, strlen(ok), 0);
+            shutdown_flag = 1;
+            break;
+        }
+
         printf("[%s:%d] dice: %s\n", ip_str, port, buffer);
 
         if (strncasecmp(buffer, "salir", 5) == 0 && bytes_leidos == 5)
@@ -81,13 +162,31 @@ void *atender_cliente(void *arg){
         send(client_fd, respuesta, strlen(respuesta), 0);
         
     }
-    
+
+limpieza:
+    quitar_cliente(client_fd);
     close(client_fd);
     free(datos);
     return NULL;
 }
 
- int main(){
+void avisar_cliente_cerrar(){
+    pthread_mutex_lock(&clientes_locks);
+    int copia[MAX_CLIENTES];
+    int cantidad = num_clientes;
+    memcpy(copia,clientes_fds,sizeof(int) * cantidad);
+    pthread_mutex_unlock(&clientes_locks);
+
+    const char *aviso = "El servidor se está apagando. Chau!";
+    for (int i = 0; i < cantidad; i++)
+    {
+        send(copia[i], aviso, strlen(aviso), 0);
+        shutdown(copia[i],SHUT_RDWR);
+    }
+    
+}
+
+int main(){
 
     int server_fd, client_fd;
     struct sockaddr_in address;
@@ -135,10 +234,35 @@ void *atender_cliente(void *arg){
 
     printf("Servidor escuchando en el puerto %d... \n", PORT);
 
-    while (1)
+    while (!shutdown_flag)
     {
+
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(server_fd, &readfds);
+
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+
+        int listo = select(server_fd + 1, & readfds, NULL, NULL, &tv);
+        
+        if (listo < 0)
+        {
+            perror("Error en el select");
+            break;
+        }
+        
+        if (listo == 0)
+        {
+            continue;
+        }
+
+        
         //---accept---
         client_fd = accept(server_fd, (struct sockaddr*)&address, &addr_len);
+
         if (client_fd < 0){
         perror("Error en accept");
         continue;
@@ -162,7 +286,11 @@ void *atender_cliente(void *arg){
         
     }
 
+    printf("[APAGANDO] Avisando a clientes conectados... \n");
+    avisar_cliente_cerrar();
 
     close(server_fd);
+    printf("[APAGADO] Servidor apagado.\n");
+    printf("Servidor finalizado.\n");
     return 0;
- }
+}
